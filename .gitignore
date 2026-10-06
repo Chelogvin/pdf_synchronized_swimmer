@@ -1,0 +1,10 @@
+__pycache__/ 
+*.pyc 
+dist/ 
+build/ 
+*.exe 
+*.spec 
+settings.json 
+build/ 
+dist/ 
+settings.json 
