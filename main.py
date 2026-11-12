@@ -131,7 +131,6 @@ class PDFTranslatorApp:
         self._build_menu()
         self._build_toolbar()
         self._build_notebook()
-        self._build_status_bar()
 
         # Восстанавливаем вкладки из настроек
         self._restore_tabs()
@@ -203,7 +202,7 @@ class PDFTranslatorApp:
         file_menu.add_command(label="📂 Открыть PDF", command=self.open_pdf_dialog)
         file_menu.add_command(label="📑 Новая вкладка", command=self.open_pdf_dialog)
         file_menu.add_separator()
-        file_menu.add_command(label="Закрыть вкладку", command=self.close_current_tab)
+        file_menu.add_command(label="Закрыть вкладку (Ctrl+F4)", command=self.close_current_tab)
         file_menu.add_separator()
         file_menu.add_command(label="Выход", command=self._on_close)
         menubar.add_cascade(label="Файл", menu=file_menu)
@@ -254,17 +253,10 @@ class PDFTranslatorApp:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-    def _build_status_bar(self):
-        nav = ttk.Frame(self.root)
-        nav.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
-
-        self.status_bar = ttk.Label(nav, text="Откройте PDF-файл")
-        self.status_bar.pack(side=tk.LEFT, padx=10)
-
     def _bind_hotkeys(self):
         self.root.bind("<Control-o>", lambda e: self.open_pdf_dialog())
         self.root.bind("<Control-t>", lambda e: self.open_pdf_dialog())
-        self.root.bind("<Control-w>", lambda e: self.close_current_tab())
+        self.root.bind("<Control-F4>", lambda e: self.close_current_tab())
         self.root.bind("<Control-plus>", lambda e: self.zoom_text_in())
         self.root.bind("<Control-minus>", lambda e: self.zoom_text_out())
         # Стрелки и PageUp/Down — обрабатываются в активной вкладке
@@ -272,12 +264,13 @@ class PDFTranslatorApp:
         self.root.bind("<Right>", lambda e: self._send_to_tab("next_page"))
         self.root.bind("<Prior>", lambda e: self._send_to_tab("prev_page"))
         self.root.bind("<Next>", lambda e: self._send_to_tab("next_page"))
-        # Переключение вкладок
+        # Переключение вкладок — только Ctrl+Tab
         self.root.bind("<Control-Tab>", lambda e: self.next_tab())
         self.root.bind("<Control-Shift-Tab>", lambda e: self.prev_tab())
-        self.root.bind("<Control-Prior>", lambda e: self.prev_tab())     # Ctrl+PageUp
-        self.root.bind("<Control-Next>", lambda e: self.next_tab())      # Ctrl+PageDown
-        self.root.bind("<Control-w>", lambda e: self.close_current_tab())  # Ctrl+W
+        
+        # Ctrl+PageUp/Down — листание страниц (как обычные PageUp/Down)
+        self.root.bind("<Control-Prior>", lambda e: self._send_to_tab("prev_page"))
+        self.root.bind("<Control-Next>", lambda e: self._send_to_tab("next_page"))
 
     def _send_to_tab(self, method_name):
         """Вызывает метод у активной вкладки"""
@@ -355,7 +348,6 @@ class PDFTranslatorApp:
 
     def _restore_tabs(self):
         tabs_state = self.settings.get("open_tabs", [])
-        print(f"=== Восстанавливаю {len(tabs_state)} вкладок ===")  # ← ДОБАВЬТЕ
         if not tabs_state:
             self._add_tab()
             return
@@ -363,7 +355,6 @@ class PDFTranslatorApp:
             path = state.get("path", "")
             page = state.get("page", 0)
             zoom = state.get("zoom", 1.5)
-            print(f"=== Вкладка: {path}, существует: {os.path.exists(path)} ===")  # ← ДОБАВЬТЕ
             if path and os.path.exists(path):
                 self._add_tab(path, page, zoom)
 
@@ -617,7 +608,10 @@ class PDFTranslatorApp:
     # ════════════════════════════════════════════════════════════════════════
 
     def _set_status(self, msg):
-        self.root.after(0, lambda: self.status_bar.config(text=msg))
+        """Устанавливает статус в активной вкладке"""
+        tab = self.get_current_tab()
+        if tab:
+            self.root.after(0, lambda: tab.set_status(msg))
 
     def _copy_to_clipboard(self, text):
         self.root.clipboard_clear()

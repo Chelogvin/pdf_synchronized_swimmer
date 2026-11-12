@@ -39,6 +39,7 @@ class PDFTab:
         self.pdf_path = pdf_path or ""
         self.current_page = 0
         self.zoom = 1.5
+        self.rotation = 0  # глобальный угол поворота для всех страниц
         self.page_image = None
         self.page_photo = None
         self.image_item = None
@@ -59,8 +60,14 @@ class PDFTab:
         # Обрезка
         self.crop_top = tk.IntVar(value=0)
         self.crop_bottom = tk.IntVar(value=0)
+        self.crop_left = tk.IntVar(value=0)
+        self.crop_right = tk.IntVar(value=0)
         self._crop_top_line_id = None
         self._crop_bottom_line_id = None
+        self._crop_left_line_id = None
+        self._crop_right_line_id = None
+        # Для перетаскивания
+        self._dragging_line = None  # "top", "bottom", "left", "right" или None
 
         # Плавающее окно
         self.popup_win = None
@@ -72,6 +79,13 @@ class PDFTab:
         if self.pdf_path:
             self._load_pdf(self.pdf_path)
 
+    def set_status(self, msg):
+        """Устанавливает статус этой вкладки"""
+        try:
+            self.status_label.config(text=msg)
+        except:
+            pass
+
     # ════════════════════════════════════════════════════════════════════════
     # Построение интерфейса вкладки
     # ════════════════════════════════════════════════════════════════════════
@@ -79,21 +93,6 @@ class PDFTab:
     def _build_ui(self):
         """Строит UI внутри родительского фрейма"""
         colors = self.app.colors
-
-        # Верхняя панель вкладки (обрезка)
-        crop_bar = ttk.Frame(self.parent)
-        crop_bar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(5, 2))
-
-        ttk.Label(crop_bar, text="✂ Обрезка (не переводить):").pack(side=tk.LEFT, padx=5)
-        ttk.Label(crop_bar, text="Сверху:").pack(side=tk.LEFT, padx=(10, 2))
-        top_spin = ttk.Spinbox(crop_bar, from_=0, to=5000, width=6,
-                               textvariable=self.crop_top, command=self._update_crop_lines)
-        top_spin.pack(side=tk.LEFT)
-        ttk.Label(crop_bar, text="Снизу:").pack(side=tk.LEFT, padx=(10, 2))
-        bot_spin = ttk.Spinbox(crop_bar, from_=0, to=5000, width=6,
-                               textvariable=self.crop_bottom, command=self._update_crop_lines)
-        bot_spin.pack(side=tk.LEFT)
-        ttk.Button(crop_bar, text="Сбросить", command=self._reset_crop).pack(side=tk.LEFT, padx=10)
 
         # Основная область (PanedWindow)
         self.paned = ttk.PanedWindow(self.parent, orient=tk.HORIZONTAL)
@@ -151,15 +150,24 @@ class PDFTab:
         ttk.Button(nav, text="+", command=self.zoom_in, width=3).pack(side=tk.LEFT)
         self.zoom_label = ttk.Label(nav, text="150%", width=5)
         self.zoom_label.pack(side=tk.LEFT, padx=5)
+        ttk.Label(nav, text="Поворот:").pack(side=tk.LEFT, padx=(15, 2))
+        ttk.Button(nav, text="↺", command=self.rotate_ccw, width=3).pack(side=tk.LEFT)
+        ttk.Button(nav, text="↻", command=self.rotate_cw, width=3).pack(side=tk.LEFT)
 
         # Привязки мыши
-        self.pdf_canvas.bind("<ButtonPress-1>", self._sel_start)
-        self.pdf_canvas.bind("<B1-Motion>", self._sel_drag)
-        self.pdf_canvas.bind("<ButtonRelease-1>", self._sel_end)
+        self.pdf_canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+        self.pdf_canvas.bind("<B1-Motion>", self._on_canvas_drag)
+        self.pdf_canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        self.pdf_canvas.bind("<Motion>", self._on_canvas_motion)
+        self.pdf_canvas.bind("<Double-Button-1>", self._on_canvas_double_click)
         self.pdf_canvas.bind("<ButtonRelease-3>", self._on_right_click)
         self.pdf_canvas.bind("<MouseWheel>", self._on_mousewheel_pdf)
         self.pdf_canvas.bind("<Button-4>", self._on_mousewheel_pdf)
         self.pdf_canvas.bind("<Button-5>", self._on_mousewheel_pdf)
+
+        # Статус вкладки
+        self.status_label = ttk.Label(nav, text="Готов", foreground=self.app.colors["status"])
+        self.status_label.pack(side=tk.RIGHT, padx=10)
 
     # ════════════════════════════════════════════════════════════════════════
     # Загрузка PDF
@@ -172,6 +180,7 @@ class PDFTab:
             self.pdf_path = path
             self.current_page = min(page, len(self.pdf_doc) - 1)
             self.zoom = zoom
+            self.rotation = 0  # ← сброс поворота
             self.render_page()
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось открыть PDF:\n{e}")
@@ -192,6 +201,8 @@ class PDFTab:
         if not self.pdf_doc:
             return
         page = self.pdf_doc[self.current_page]
+        # Применяем поворот
+        page.set_rotation(self.rotation)
         mat = fitz.Matrix(self.zoom, self.zoom)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         pil_img = Image.open(io.BytesIO(pix.tobytes("ppm")))
@@ -256,6 +267,19 @@ class PDFTab:
             self.zoom = round(self.zoom - 0.25, 2)
             self.render_page()
 
+    def rotate_cw(self):
+        """Поворот по часовой стрелке на 90°"""
+        self.rotation = (self.rotation + 90) % 360
+        self._clear_translation()
+        self.render_page()
+        # Перевод перезапустится автоматически через translate_timer в render_page
+
+    def rotate_ccw(self):
+        """Поворот против часовой стрелки на 90°"""
+        self.rotation = (self.rotation - 90) % 360
+        self._clear_translation()
+        self.render_page()
+
     # ════════════════════════════════════════════════════════════════════════
     # Выделение
     # ════════════════════════════════════════════════════════════════════════
@@ -289,7 +313,7 @@ class PDFTab:
         if w < 5 or h < 5:
             self._clear_selection()
             return
-        self.app._set_status(f"Выделено: {w}×{h} пикс.")
+        self.set_status(f"Выделено: {w}×{h} пикс.")
         self.sel_start = None
 
     def _clear_selection(self):
@@ -311,40 +335,219 @@ class PDFTab:
     # ════════════════════════════════════════════════════════════════════════
 
     def _update_crop_lines(self):
-        if self._crop_top_line_id:
-            self.pdf_canvas.delete(self._crop_top_line_id)
-        if self._crop_bottom_line_id:
-            self.pdf_canvas.delete(self._crop_bottom_line_id)
+        """Рисует 4 линии обрезки"""
+        # Удаляем старые линии
+        for attr in ['_crop_top_line_id', '_crop_bottom_line_id',
+                     '_crop_left_line_id', '_crop_right_line_id']:
+            line_id = getattr(self, attr, None)
+            if line_id:
+                self.pdf_canvas.delete(line_id)
+                setattr(self, attr, None)
+
         if not self.page_image:
             return
+
         w, h = self.page_image.size
-        top_px = self.crop_top.get()
-        bottom_px = self.crop_bottom.get()
-        if top_px > 0:
+        top = self.crop_top.get()
+        bottom = self.crop_bottom.get()
+        left = self.crop_left.get()
+        right = self.crop_right.get()
+
+        # Верхняя линия
+        if top > 0 or True:  # всегда рисуем
             self._crop_top_line_id = self.pdf_canvas.create_line(
-                0, top_px, w, top_px, fill="#e53935", width=2, dash=(8, 4))
-        bottom_y = h - bottom_px
-        if bottom_px > 0 and bottom_y > 0:
-            self._crop_bottom_line_id = self.pdf_canvas.create_line(
-                0, bottom_y, w, bottom_y, fill="#e53935", width=2, dash=(8, 4))
+                0, top, w, top,
+                fill="#e53935", width=5, tags=("crop_line", "crop_top"))
+
+        # Нижняя линия
+        bottom_y = h - bottom
+        self._crop_bottom_line_id = self.pdf_canvas.create_line(
+            0, bottom_y, w, bottom_y,
+            fill="#e53935", width=5, tags=("crop_line", "crop_bottom"))
+
+        # Левая линия
+        self._crop_left_line_id = self.pdf_canvas.create_line(
+            left, 0, left, h,
+            fill="#e53935", width=5, tags=("crop_line", "crop_left"))
+
+        # Правая линия
+        right_x = w - right
+        self._crop_right_line_id = self.pdf_canvas.create_line(
+            right_x, 0, right_x, h,
+            fill="#e53935", width=5, tags=("crop_line", "crop_right"))
 
     def _reset_crop(self):
+        """Сбрасывает все линии в 0"""
         self.crop_top.set(0)
         self.crop_bottom.set(0)
+        self.crop_left.set(0)
+        self.crop_right.set(0)
         self._update_crop_lines()
+        # Перезапускаем перевод
+        if self.pdf_doc:
+            self._clear_translation()
+            self.translate_current_page()
+
+    def _on_canvas_motion(self, event):
+        """Отслеживает наведение на линию обрезки"""
+        if not self.page_image:
+            return
+        if self._dragging_line:
+            return  # уже тянем — не меняем курсор
+        
+        x = self.pdf_canvas.canvasx(event.x)
+        y = self.pdf_canvas.canvasy(event.y)
+        line = self._detect_line_near(x, y)
+        
+        if line in ("top", "bottom"):
+            self.pdf_canvas.config(cursor="sb_v_double_arrow")
+        elif line in ("left", "right"):
+            self.pdf_canvas.config(cursor="sb_h_double_arrow")
+        else:
+            self.pdf_canvas.config(cursor="crosshair")
+        
+        # Подсветка линии
+        self._highlight_line(line)
+
+    def _detect_line_near(self, x, y, threshold=8):
+        """Определяет, какая линия рядом с координатами"""
+        if not self.page_image:
+            return None
+        w, h = self.page_image.size
+        
+        top_y = self.crop_top.get()
+        bottom_y = h - self.crop_bottom.get()
+        left_x = self.crop_left.get()
+        right_x = w - self.crop_right.get()
+        
+        # Приоритет: горизонтальные линии (верх/низ) — проверяем расстояние по Y
+        if abs(y - top_y) < threshold:
+            return "top"
+        if abs(y - bottom_y) < threshold:
+            return "bottom"
+        if abs(x - left_x) < threshold:
+            return "left"
+        if abs(x - right_x) < threshold:
+            return "right"
+        return None
+
+    def _highlight_line(self, line):
+        """Подсвечивает линию при наведении"""
+        mapping = {
+            "top": "_crop_top_line_id",
+            "bottom": "_crop_bottom_line_id",
+            "left": "_crop_left_line_id",
+            "right": "_crop_right_line_id",
+        }
+        for key, attr in mapping.items():
+            line_id = getattr(self, attr, None)
+            if not line_id:
+                continue
+            if key == line:
+                self.pdf_canvas.itemconfig(line_id, fill="#ff0000", width=7)
+            else:
+                self.pdf_canvas.itemconfig(line_id, fill="#e53935", width=5)
+
+    def _on_canvas_press(self, event):
+        """Нажатие мыши — начало перетаскивания линии или выделения"""
+        x = self.pdf_canvas.canvasx(event.x)
+        y = self.pdf_canvas.canvasy(event.y)
+        line = self._detect_line_near(x, y)
+        
+        if line:
+            self._dragging_line = line
+            self._drag_start_x = x
+            self._drag_start_y = y
+            return  # не начинаем выделение
+    
+        # Иначе — обычное выделение
+        self._sel_start(event)
+
+    def _on_canvas_drag(self, event):
+        """Движение мыши — перетаскивание линии или выделения"""
+        if self._dragging_line:
+            self._drag_line(event)
+        else:
+            self._sel_drag(event)
+
+    def _on_canvas_release(self, event):
+        """Отпускание мыши"""
+        if self._dragging_line:
+            self._dragging_line = None
+            self._update_crop_lines()
+            # Перезапуск перевода
+            if self.pdf_doc:
+                self._clear_translation()
+                self.translate_current_page()
+            return
+        
+        self._sel_end(event)
+
+    def _drag_line(self, event):
+        """Двигает выбранную линию"""
+        if not self.page_image:
+            return
+        
+        x = self.pdf_canvas.canvasx(event.x)
+        y = self.pdf_canvas.canvasy(event.y)
+        w, h = self.page_image.size
+        
+        if self._dragging_line == "top":
+            new_y = max(0, min(int(y), h - self.crop_bottom.get() - 10))
+            self.crop_top.set(new_y)
+        elif self._dragging_line == "bottom":
+            new_y = max(0, min(int(h - y), h - self.crop_top.get() - 10))
+            self.crop_bottom.set(new_y)
+        elif self._dragging_line == "left":
+            new_x = max(0, min(int(x), w - self.crop_right.get() - 10))
+            self.crop_left.set(new_x)
+        elif self._dragging_line == "right":
+            new_x = max(0, min(int(w - x), w - self.crop_left.get() - 10))
+            self.crop_right.set(new_x)
+        
+        self._update_crop_lines()
+
+    def _on_canvas_double_click(self, event):
+        """Двойной клик — сброс линии"""
+        x = self.pdf_canvas.canvasx(event.x)
+        y = self.pdf_canvas.canvasy(event.y)
+        line = self._detect_line_near(x, y)
+        
+        if line == "top":
+            self.crop_top.set(0)
+        elif line == "bottom":
+            self.crop_bottom.set(0)
+        elif line == "left":
+            self.crop_left.set(0)
+        elif line == "right":
+            self.crop_right.set(0)
+        else:
+            return
+        
+        self._update_crop_lines()
+        if self.pdf_doc:
+            self._clear_translation()
+            self.translate_current_page()
 
     def _get_crop_rect_pdf(self):
         if not self.pdf_doc or not self.page_image:
             return None
         top_px = self.crop_top.get()
         bottom_px = self.crop_bottom.get()
-        if top_px == 0 and bottom_px == 0:
+        left_px = self.crop_left.get()
+        right_px = self.crop_right.get()
+        
+        if top_px == 0 and bottom_px == 0 and left_px == 0 and right_px == 0:
             return None
-        _, img_h = self.page_image.size
+        
+        img_w, img_h = self.page_image.size
+        x0 = left_px / self.zoom
         y0 = top_px / self.zoom
+        x1 = (img_w - right_px) / self.zoom
         y1 = (img_h - bottom_px) / self.zoom
+        
         page = self.pdf_doc[self.current_page]
-        return fitz.Rect(0, y0, page.rect.width, max(y1, y0 + 1))
+        return fitz.Rect(x0, y0, x1, y1)
 
     # ════════════════════════════════════════════════════════════════════════
     # Получение текста с абзацами
@@ -372,9 +575,12 @@ class PDFTab:
             if block["type"] == 0:
                 for line in block["lines"]:
                     x0 = line["bbox"][0]
+                    x1 = line["bbox"][2]
                     y0 = line["bbox"][1]
                     if clip_rect:
                         if y0 < clip_rect.y0 or y0 > clip_rect.y1:
+                            continue
+                        if x1 < clip_rect.x0 or x0 > clip_rect.x1:
                             continue
                         x0 = x0 - clip_rect.x0
                     text_line = " ".join([span["text"] for span in line["spans"]])
@@ -401,7 +607,7 @@ class PDFTab:
             return
         if self.is_translating:
             return
-        self.app._set_status("Перевожу…")
+        self.set_status("Перевожу…")
         threading.Thread(target=self._translate_page_thread, daemon=True).start()
 
     def _translate_page_thread(self):
@@ -415,7 +621,7 @@ class PDFTab:
                 return
             result = self._do_translate(text)
             self.app.root.after(0, lambda: self._show_translation(result))
-            self.app.root.after(0, lambda: self.app._set_status("Перевод готов"))
+            self.app.root.after(0, lambda: self.set_status("Перевод готов"))
         except Exception as e:
             print(f"Ошибка: {e}")
         finally:

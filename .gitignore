@@ -5,6 +5,3 @@ build/
 *.exe 
 *.spec 
 settings.json 
-build/ 
-dist/ 
-settings.json 
